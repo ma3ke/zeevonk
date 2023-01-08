@@ -1,0 +1,14 @@
+# [profile]
+# rpath = true
+
+[build]
+target = "arm-unknown-linux-musleabihf"
+
+[target.arm-unknown-linux-musleabihf]
+linker = "arm-unknown-linux-musleabihf-ld"
+#linker = "/Users/koenwestendorp/pi-tools/arm-bcm2708/arm-bcm2708hardfp-linux-gnueabi/bin/arm-bcm2708hardfp-linux-gnueabi-ld"
+#rustflags = ["--sysroot", "/Users/koenwestendorp/pi-tools/arm-bcm2708/arm-bcm2708hardfp-linux-gnueabi"]
+
+
+# [target.armv7-unknown-linux-musleabihf]
+# linker = "arm-linux-gnueabihf-ld"
