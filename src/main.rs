@@ -1,10 +1,10 @@
 #![feature(array_chunks)]
 #![feature(slice_as_chunks)]
 
-use std::slice::Iter;
+use std::net::TcpListener;
+use std::sync::atomic::AtomicU32;
 use std::sync::mpsc;
 use std::thread::spawn;
-use std::{hint, net::TcpListener};
 
 use rs_ws281x::{ChannelBuilder, ControllerBuilder, StripType};
 use tungstenite::{
@@ -15,10 +15,9 @@ use tungstenite::{
 
 const ADDRESS: &str = "0.0.0.0:80";
 
-type Frame = Vec<u8>;
-
 #[derive(Clone, Debug)]
 struct Data {
+    #[allow(unused)]
     num_frames: u8,
     num_leds: u8,
     framerate: u8,
@@ -68,9 +67,9 @@ impl Data {
 }
 
 fn main() {
-    let (sender, receiver) = mpsc::channel::<Data>();
+    let (sender, receiver) = mpsc::channel::<(u32, Data)>();
 
-    let controller_handle = spawn(move || {
+    let _controller_handle = spawn(move || {
         let mut controller = ControllerBuilder::new()
             .freq(800_000)
             .dma(10)
@@ -87,12 +86,12 @@ fn main() {
             .build()
             .unwrap();
 
-        let mut data = receiver.recv().expect("channel recv error");
+        let (mut conn, mut data) = receiver.recv().expect("channel recv error");
         loop {
             let time_per_frame = std::time::Duration::from_secs_f64(1.0 / data.framerate as f64);
             let mut prev_time = std::time::Instant::now();
 
-            for (n, frame) in data.frames().iter().enumerate() {
+            for (_n, frame) in data.frames().iter().enumerate() {
                 let leds_mut = controller.leds_mut(0);
                 for i in 0..data.num_leds as usize {
                     let ctrl_led = &mut leds_mut[i];
@@ -102,7 +101,7 @@ fn main() {
                 controller.render().unwrap();
 
                 let elapsed = prev_time.elapsed();
-                println!("t => {elapsed:?}    / {time_per_frame:?}");
+                print!("{conn:03}: {:.3} ms\r", elapsed.as_millis());
                 if elapsed < time_per_frame {
                     std::thread::sleep(time_per_frame - elapsed);
                 }
@@ -111,25 +110,26 @@ fn main() {
 
             // If there is new data available we use it for the next loop. Else we keep showing the
             // same pattern.
-            if let Ok(new_data) = receiver.try_recv() {
-                println!("new data!");
-                data = new_data
+            if let Ok((new_conn, new_data)) = receiver.try_recv() {
+                conn = new_conn;
+                data = new_data;
             }
         }
-
-        unreachable!()
     });
+
+    let conn = AtomicU32::new(0);
 
     let server = TcpListener::bind(ADDRESS).unwrap();
     for stream in server.incoming() {
         let sender = sender.clone();
+        let conn = conn.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         spawn(move || {
-            let callback = |req: &Request, mut response: Response| {
-                println!("Received a new ws handshake");
-                println!("The request's path is: {}", req.uri().path());
-                println!("The request's headers are:");
+            let callback = |req: &Request, response: Response| {
+                println!("{conn:03}: Received a new ws handshake");
+                println!("{conn:03}: The request's path is: {}", req.uri().path());
+                println!("{conn:03}: The request's headers are:");
                 for (ref header, _value) in req.headers() {
-                    println!("* {}", header);
+                    println!("{conn:03}: * {}", header);
                 }
 
                 Ok(response)
@@ -145,16 +145,16 @@ fn main() {
                 match msg {
                     Message::Binary(bytes) => {
                         let data = Data::from_bytes_vec(bytes.to_vec()).unwrap();
-                        sender.send(data);
+                        sender.send((conn, data)).expect("channel send error");
                     }
-                    Message::Text(t) => println!("text: {t}"),
-                    Message::Ping(_) => println!("ping"),
-                    Message::Pong(_) => println!("pong"),
+                    Message::Text(t) => println!("{conn:03}: text: {t}"),
+                    Message::Ping(_) => println!("{conn:03}: ping"),
+                    Message::Pong(_) => println!("{conn:03}: pong"),
                     Message::Close(_) => {
-                        println!("close");
+                        println!("{conn:03}: close");
                         break;
                     }
-                    Message::Frame(_) => println!("frame"),
+                    Message::Frame(_) => println!("{conn:03}: frame"),
                 };
             }
         });
