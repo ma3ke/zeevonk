@@ -2,9 +2,10 @@
 #![feature(slice_as_chunks)]
 
 use std::net::TcpListener;
-use std::sync::atomic::AtomicU32;
-use std::sync::mpsc;
-use std::thread::spawn;
+use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use rs_ws281x::{ChannelBuilder, ControllerBuilder, StripType};
 use tungstenite::{
@@ -14,129 +15,165 @@ use tungstenite::{
 };
 
 const ADDRESS: &str = "0.0.0.0:80";
+const GPIO_PIN: i32 = 10; // GPIO 10 = SPI0 MOSI
+const FRAMES_PER_SECOND: f64 = 50.0;
+const WELCOME_MESSAGE: &str = r#"
+                                                   888
+8P d8P  ,e e,   ,e e,  Y8b Y888P  e88 88e  888 8e  888 ee
+P d8P  d88 88b d88 88b  Y8b Y8P  d888 888b 888 88b 888 P
+ d8P d 888   , 888   ,   Y8b "   Y888 888P 888 888 888 b
+d8P d8  "KoeN"  "BauX"    Y8P     "88 88"  888 888 888 8b
 
+            By Koen & Bauke Westendorp, 2023.
+
+"#;
+
+/// A Data type which holds the vector of bytes representing the values to send to the led strip.
+///
+/// Values are stored as an array of bytes. Each triplet of bytes holds the values to drive one
+/// led, in (r, g, b) ordering.
 #[derive(Clone, Debug)]
 struct Data {
-    #[allow(unused)]
-    num_frames: u8,
-    num_leds: u8,
-    framerate: u8,
     leds: Vec<u8>,
 }
 
-impl Data {
-    fn from_bytes_vec(data: Vec<u8>) -> Result<Self, String> {
-        if data.len() <= 3 {
-            return Err("data must contain a 3 byte header (n_frames, n_leds, framerate) followed by bytes describing the led states".to_string());
+/// A ConnectionInformation type which is sent through a channel to communicate the number of open
+/// connections and the sender's client_id to the receiving led driver thread. These values are
+/// used for logging.
+#[derive(Clone, Copy, Debug)]
+struct ConnectionInformation {
+    client_id: u32,
+    open_connections: u32,
+}
+
+impl ConnectionInformation {
+    /// Creates a new Connection struct.
+    fn new(client_id: u32, open_connections: u32) -> Self {
+        Self {
+            client_id,
+            open_connections,
         }
-
-        let mut data = data.iter();
-        let num_frames = *data
-            .next()
-            .ok_or("invalid field 'num_frames'".to_string())?;
-        let num_leds = *data.next().ok_or("invalid field 'num_leds'".to_string())?;
-        let framerate = *data.next().ok_or("invalid field 'framerate'".to_string())?;
-        let leds: Vec<u8> = data.map(|b| *b).collect();
-
-        if leds.len() != num_frames as usize * num_leds as usize * 3 {
-            return Err(format!(
-                "frames data must conform to the size specified in the header ({} != {})",
-                leds.len(),
-                num_frames as usize * num_leds as usize * 3
-            )
-            .to_string());
-        };
-
-        Ok(Self {
-            num_frames,
-            num_leds,
-            framerate,
-            leds,
-        })
-    }
-
-    fn frames(&self) -> Vec<&[[u8; 3]]> {
-        self.leds
-            .chunks(self.num_leds as usize * 3)
-            .map(|frame| {
-                let (leds, _) = frame.as_chunks::<3>();
-                leds
-            })
-            .collect::<Vec<&[[u8; 3]]>>()
     }
 }
 
-fn main() {
-    let (sender, receiver) = mpsc::channel::<(u32, Data)>();
+/// A tuple to be sent over the channel, containing the ConnectionInformation metadata and the Data
+/// itself.
+type ChannelData = (ConnectionInformation, Data);
 
-    let _controller_handle = spawn(move || {
-        let mut controller = ControllerBuilder::new()
-            .freq(800_000)
-            .dma(10)
-            .channel(
-                0, // Channel Index
-                ChannelBuilder::new()
-                    .pin(10) // GPIO 10 = SPI0 MOSI
-                    .count(208) // Number of LEDs
-                    .invert(false)
-                    .strip_type(StripType::Ws2811Gbr)
-                    .brightness(255) // default: 255
-                    .build(),
-            )
-            .build()
-            .unwrap();
+impl Data {
+    /// Number of leds stored inside data.
+    ///
+    /// Simply a thin wrapper for a call to len() of the internal vector storing the LED bytes,
+    /// divided by 3. There are three bytes per LED.
+    fn num_leds(&self) -> usize {
+        self.leds.len() / 3
+    }
 
-        let (mut conn, mut data) = receiver.recv().expect("channel recv error");
-        loop {
-            let time_per_frame = std::time::Duration::from_secs_f64(1.0 / data.framerate as f64);
-            let mut prev_time = std::time::Instant::now();
-
-            for (_n, frame) in data.frames().iter().enumerate() {
-                let leds_mut = controller.leds_mut(0);
-                for i in 0..data.num_leds as usize {
-                    let ctrl_led = &mut leds_mut[i];
-                    let [c1, c2, c3] = frame[i];
-                    *ctrl_led = [c1, c2, c3, 0];
-                }
-                controller.render().unwrap();
-
-                let elapsed = prev_time.elapsed();
-                print!("{conn:03}: {:.3} ms\r", elapsed.as_millis());
-                if elapsed < time_per_frame {
-                    std::thread::sleep(time_per_frame - elapsed);
-                }
-                prev_time = std::time::Instant::now();
-            }
-
-            // If there is new data available we use it for the next loop. Else we keep showing the
-            // same pattern.
-            if let Ok((new_conn, new_data)) = receiver.try_recv() {
-                conn = new_conn;
-                data = new_data;
-            }
+    /// Creates a new Data struct when the data is well-formed.
+    ///
+    /// In case the number of bytes in data is not a multiple of 3, the data is not well formed and
+    /// an Err is returned.
+    fn from_bytes_vec(data: Vec<u8>) -> Result<Self, String> {
+        match data.len() % 3 {
+            0 => Ok(Self { leds: data }),
+            _ => Err("data should have a length that is a multiple of three, considering there are 3 values for each led".to_string()),
         }
-    });
+    }
 
-    let conn = AtomicU32::new(0);
+    /// Returns a tuple of the (red, green, blue) values for the led at index.
+    ///
+    /// This method will panic if the data is malformed. Because we deal with the shape of the data
+    /// in the initialization using `from_bytes_vec`, this should not happen. If it does, there is
+    /// something fishy going on.
+    fn led(&self, index: usize) -> (u8, u8, u8) {
+        // TODO: There are more beautiful ways of doing this. Bikeshedding the playing around to
+        // future self.
+        if let [r, g, b] = self.leds[index * 3..index * 3 + 3] {
+            (r, g, b)
+        } else {
+            panic!("malformed data: the number of leds must be a multiple of 3")
+        }
+    }
+}
 
-    let server = TcpListener::bind(ADDRESS).unwrap();
+/// Initializes and runs the led strip controller. When new data is received over the `receiver`
+/// channel handler, it is
+fn controller(receiver: Receiver<ChannelData>) {
+    let mut controller = ControllerBuilder::new()
+        .freq(800_000)
+        .dma(10)
+        .channel(
+            0, // Channel Index
+            ChannelBuilder::new()
+                .pin(GPIO_PIN)
+                .count(208) // Number of LEDs
+                .invert(false)
+                .strip_type(StripType::Ws2811Gbr)
+                .brightness(255) // default: 255
+                .build(),
+        )
+        .build()
+        .unwrap();
+
+    let frame_time = Duration::from_secs_f64(1.0 / FRAMES_PER_SECOND);
+    let (mut connection, mut data) = receiver.recv().expect("channel recv error");
+    let mut prev_time = Instant::now();
+    loop {
+        let leds_mut = controller.leds_mut(0);
+
+        for i in 0..data.num_leds() as usize {
+            let ctrl_led = &mut leds_mut[i];
+            let (r, g, b) = data.led(i);
+            *ctrl_led = [r, g, b, 0];
+        }
+
+        controller.render().unwrap();
+
+        let open_connections = connection.open_connections;
+        let client_id = connection.client_id;
+        let (r, g, b) = data.led(data.num_leds() - 1);
+        let elapsed = prev_time.elapsed();
+        let rgb = format!("\u{1b}[48;2;{r};{g};{b}m \u{1b}[0m");
+        let elapsed_millis = elapsed.as_micros() as f32 / 1000.0;
+        println!("({open_connections}) client {client_id:>2}: {elapsed_millis:.2} ms  [{rgb}]",);
+        if elapsed < frame_time {
+            thread::sleep(frame_time - elapsed);
+        }
+        prev_time = Instant::now();
+
+        // If there is new data available we use it for the next loop. Else we keep showing the
+        // same pattern.
+        if let Ok((new_connection, new_data)) = receiver.recv() {
+            connection = new_connection;
+            data = new_data;
+        }
+    }
+}
+
+/// Listens for new websocket connections on `address` and spawns a new thread to listen on for
+/// each connection. When a connection receives data, it is sent over the `sender` channel handler.
+fn listener(address: &str, sender: Sender<ChannelData>) {
+    static CLIENT_ID: AtomicU32 = AtomicU32::new(0);
+    static OPEN_CONNECTIONS: AtomicU32 = AtomicU32::new(0);
+
+    let server = TcpListener::bind(address).unwrap();
+    println!("Listening on: {address} ...\n");
     for stream in server.incoming() {
         let sender = sender.clone();
-        let conn = conn.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        spawn(move || {
-            let callback = |req: &Request, response: Response| {
-                println!("{conn:03}: Received a new ws handshake");
-                println!("{conn:03}: The request's path is: {}", req.uri().path());
-                println!("{conn:03}: The request's headers are:");
-                for (ref header, _value) in req.headers() {
-                    println!("{conn:03}: * {}", header);
-                }
-
+        let client_id = CLIENT_ID.fetch_add(1, Relaxed);
+        // let open_connections = OPEN_CONNECTIONS.clone();
+        thread::spawn(move || {
+            let callback = |_req: &Request, response: Response| {
+                let open_connections = OPEN_CONNECTIONS.load(Relaxed);
+                println!("({open_connections}) client {client_id:>2}: New connection.");
                 Ok(response)
             };
-            let mut websocket = accept_hdr(stream.unwrap(), callback).unwrap();
 
-            loop {
+            let mut websocket = accept_hdr(stream.unwrap(), callback).unwrap();
+            // Now that we have opened the connection, we add one to the open connectsions counter.
+            OPEN_CONNECTIONS.fetch_add(1, Relaxed);
+
+            'receive: loop {
                 let msg = websocket.read_message().unwrap();
                 // websocket
                 //     .write_message(Message::Text("received".to_string()))
@@ -145,18 +182,34 @@ fn main() {
                 match msg {
                     Message::Binary(bytes) => {
                         let data = Data::from_bytes_vec(bytes.to_vec()).unwrap();
-                        sender.send((conn, data)).expect("channel send error");
+                        print!(".");
+                        let connection =
+                            ConnectionInformation::new(client_id, OPEN_CONNECTIONS.load(Relaxed));
+                        sender.send((connection, data)).expect("channel send error");
                     }
-                    Message::Text(t) => println!("{conn:03}: text: {t}"),
-                    Message::Ping(_) => println!("{conn:03}: ping"),
-                    Message::Pong(_) => println!("{conn:03}: pong"),
+                    Message::Text(t) => println!("client {client_id:>2}: text: {t}"),
+                    Message::Ping(_) => println!("client {client_id:>2}: ping"),
+                    Message::Pong(_) => println!("client {client_id:>2}: pong"),
                     Message::Close(_) => {
-                        println!("{conn:03}: close");
-                        break;
+                        let open_connections = OPEN_CONNECTIONS.load(Relaxed);
+                        let new_connections = open_connections - 1;
+                        println!("({open_connections}) {client_id:>2}: connection closed ({open_connections} -> {new_connections})");
+                        break 'receive;
                     }
-                    Message::Frame(_) => println!("{conn:03}: frame"),
+                    Message::Frame(_) => println!("client {client_id:>2}: frame"),
                 };
             }
+
+            // When the connection closes, we decrement OPEN_CONNECTIONS by one.
+            OPEN_CONNECTIONS.fetch_sub(1, Relaxed);
         });
     }
+}
+
+fn main() {
+    println!("{WELCOME_MESSAGE}");
+    let (sender, receiver) = mpsc::channel::<(ConnectionInformation, Data)>();
+
+    thread::spawn(move || controller(receiver));
+    listener(ADDRESS, sender)
 }
