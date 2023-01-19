@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use rs_ws281x::{ChannelBuilder, ControllerBuilder, StripType, WS2811Error};
 
-use crate::{ChannelData, FRAMES_PER_SECOND, GPIO_PIN};
+use crate::{ChannelData, Stats, FRAMES_PER_SECOND, GPIO_PIN};
 
 /// Initializes and runs the led strip controller. When new data is received over the `receiver`
 /// channel handler, it is rendered to the led strip controller on the tempo of FRAMES_PER_SECOND.
@@ -32,6 +32,7 @@ pub(crate) fn controller(receiver: Receiver<ChannelData>) -> Result<(), WS2811Er
     let frame_time = Duration::from_secs_f64(1.0 / FRAMES_PER_SECOND);
     let (mut connection, mut data) = receiver.recv().expect("channel recv error");
     let mut prev_time = Instant::now();
+    let mut stats: Stats<f64, 32> = Stats::new();
     loop {
         let leds_mut = controller.leds_mut(0);
 
@@ -50,7 +51,11 @@ pub(crate) fn controller(receiver: Receiver<ChannelData>) -> Result<(), WS2811Er
         // This escape code magic prints a nice colored cell to a color-enabled console.
         let rgb = format!("\u{1b}[48;2;{r};{g};{b}m \u{1b}[0m");
         let elapsed_millis = elapsed.as_micros() as f32 / 1000.0;
-        println!("({open_connections}) client {client_id:>2}: {elapsed_millis:.2} ms  [{rgb}]",);
+        stats.push(elapsed.as_millis() as f64);
+        let avg = stats.buffer().iter().sum::<f64>() / stats.buffer_size() as f64;
+        let min = stats.min();
+        let max = stats.max();
+        println!("({open_connections}) client {client_id:>2}: {elapsed_millis:.2} ms ({min:.2}<{avg:.2}<{max:.2}) [{rgb}]",);
         if elapsed < frame_time {
             thread::sleep(frame_time - elapsed);
         }

@@ -4,10 +4,12 @@ use std::thread;
 use crate::controller::controller;
 use crate::data::Data;
 use crate::listener::listener;
+use crate::stats::Stats;
 
 mod controller;
 mod data;
 mod listener;
+mod stats;
 
 const ADDRESS: &str = "0.0.0.0:80";
 const GPIO_PIN: i32 = 10; // GPIO 10 = SPI0 MOSI
