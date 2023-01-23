@@ -17,7 +17,7 @@ pub(crate) fn listener(address: &str, sender: Sender<ChannelData>) {
     static CLIENT_ID: AtomicU32 = AtomicU32::new(0);
     static OPEN_CONNECTIONS: AtomicU32 = AtomicU32::new(0);
 
-    let server = TcpListener::bind(address).unwrap();
+    let server = TcpListener::bind(address).expect("address should be valid");
     println!("Listening on: {address} ...\n");
     for stream in server.incoming() {
         let sender = sender.clone();
@@ -38,7 +38,6 @@ pub(crate) fn listener(address: &str, sender: Sender<ChannelData>) {
                 match websocket.read_message().unwrap() {
                     Message::Binary(bytes) => {
                         let data = Data::from_bytes_vec(bytes.to_vec()).unwrap();
-                        print!(".");
                         let connection =
                             ConnectionInformation::new(client_id, OPEN_CONNECTIONS.load(Relaxed));
                         sender.send((connection, data)).expect("channel send error");
