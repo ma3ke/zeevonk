@@ -1,5 +1,7 @@
 /// A Stats type which can track the minimum and maximum value encountered and the average value
 /// over the past `N` encountered values.
+///
+/// Internally, the `buffer` is basically a ring buffer.
 pub(crate) struct Stats<T, const N: usize> {
     min: T,
     max: T,
@@ -26,11 +28,7 @@ where
     /// When the buffer is full, the oldest value is overridden.
     pub(crate) fn push(&mut self, value: T) {
         self.buffer[self.cursor] = value;
-        // TODO: There must be something nicer for this.
-        self.cursor += 1;
-        if self.cursor >= N {
-            self.cursor = 0;
-        }
+        self.cursor = (self.cursor + 1) % N;
         if self.min > value {
             self.min = value
         }
