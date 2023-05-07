@@ -15,7 +15,7 @@ use crate::{FRAMES_PER_SECOND, GPIO_PIN};
 /// Otherwise, this function will return nothing.
 ///
 /// When no new messages are sent over the channel, the last frame will be displayed continuously.
-pub(crate) fn controller(receiver: Receiver<Vec<Color>>) -> Result<(), WS2811Error> {
+pub(crate) fn controller(receiver: Receiver<Data>) -> Result<(), WS2811Error> {
     let mut controller = ControllerBuilder::new()
         .freq(800_000)
         .dma(10)
@@ -32,7 +32,7 @@ pub(crate) fn controller(receiver: Receiver<Vec<Color>>) -> Result<(), WS2811Err
         .build()?;
 
     let frame_time = Duration::from_secs_f64(1.0 / FRAMES_PER_SECOND);
-    let colors = receiver.recv().expect("channel recv error");
+    let leds = receiver.recv().expect("channel recv error");
     let mut prev_time = Instant::now();
     loop {
         let leds_mut = controller.leds_mut(0);
@@ -51,8 +51,10 @@ pub(crate) fn controller(receiver: Receiver<Vec<Color>>) -> Result<(), WS2811Err
         let elapsed = prev_time.elapsed();
         // This escape code magic prints a nice colored cell to a color-enabled console.
         let rgb = format!("\u{1b}[48;2;{r};{g};{b}m \u{1b}[0m");
+
         let elapsed_millis = elapsed.as_micros() as f32 / 1000.0;
         println!("({open_connections}) client {client_id:>2}: {elapsed_millis:.2} ms  [{rgb}]",);
+
         if elapsed < frame_time {
             thread::sleep(frame_time - elapsed);
         }

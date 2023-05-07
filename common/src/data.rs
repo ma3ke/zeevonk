@@ -1,17 +1,15 @@
+/// Represents a single led (or it's color)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Color {
+pub struct Led {
     pub red: u8,
     pub green: u8,
     pub blue: u8,
 }
 
 /// A Data type which holds the vector of bytes representing the values to send to the led strip.
-///
-/// Values are stored as an array of bytes. Each triplet of bytes holds the values to drive one
-/// led, in (r, g, b) ordering.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Data {
-    pub leds: Vec<Color>,
+    pub leds: Vec<Led>,
 }
 
 impl Data {
@@ -23,17 +21,17 @@ impl Data {
         let mut bytes = bytes;
         match bytes.len() % 3 {
             0 => {
-                let mut colors = Vec::<Color>::new();
+                let mut leds = Vec::<Led>::new();
                 while bytes.len() > 2 {
                     let rgb: Vec<u8> = bytes.drain(0..3).collect();
                     if let [red, green, blue] = rgb.as_slice().to_owned()[..] {
-                        colors.push(Color { red, green, blue });
+                        leds.push(Led { red, green, blue });
                     } else {
                         eprintln!("Failed to get rgb values from bytes!");
                     }
                 }
 
-                Ok(Self { leds: colors})
+                Ok(Self { leds })
             },
             _ => Err("data should have a length that is a multiple of three, considering there are 3 values for each led".to_string()),
         }
@@ -43,26 +41,26 @@ impl Data {
 mod tests {
     #[test]
     fn parsing_led_bytes() {
-        use crate::data::{Color, Data};
+        use crate::data::{Data, Led};
 
         let bytes = vec![72, 39, 100, 95, 26, 200, 122, 102, 120];
-        let parsed_colors = Data::from_bytes_vec(bytes).unwrap();
+        let parsed_leds = Data::from_bytes_vec(bytes).unwrap();
 
         assert_eq!(
-            parsed_colors,
+            parsed_leds,
             Data {
                 leds: vec![
-                    Color {
+                    Led {
                         red: 72,
                         green: 39,
                         blue: 100
                     },
-                    Color {
+                    Led {
                         red: 95,
                         green: 26,
                         blue: 200
                     },
-                    Color {
+                    Led {
                         red: 122,
                         green: 102,
                         blue: 120
