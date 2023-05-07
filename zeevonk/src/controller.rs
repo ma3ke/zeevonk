@@ -15,7 +15,7 @@ use crate::{FRAMES_PER_SECOND, GPIO_PIN};
 /// Otherwise, this function will return nothing.
 ///
 /// When no new messages are sent over the channel, the last frame will be displayed continuously.
-pub(crate) fn controller(receiver: Receiver<ChannelData>) -> Result<(), WS2811Error> {
+pub(crate) fn controller(receiver: Receiver<Vec<Color>>) -> Result<(), WS2811Error> {
     let mut controller = ControllerBuilder::new()
         .freq(800_000)
         .dma(10)
@@ -32,7 +32,7 @@ pub(crate) fn controller(receiver: Receiver<ChannelData>) -> Result<(), WS2811Er
         .build()?;
 
     let frame_time = Duration::from_secs_f64(1.0 / FRAMES_PER_SECOND);
-    let (mut connection, mut data) = receiver.recv().expect("channel recv error");
+    let colors = receiver.recv().expect("channel recv error");
     let mut prev_time = Instant::now();
     loop {
         let leds_mut = controller.leds_mut(0);

@@ -2,9 +2,8 @@ use std::sync::mpsc;
 use std::thread;
 
 use common::data::Data;
-use common::listener::ConnectionInformation;
 
-mod controller;
+mod renderer;
 
 const ADDRESS: &str = "0.0.0.0:7200";
 const FRAMES_PER_SECOND: f64 = 50.0;
@@ -20,8 +19,8 @@ const WELCOME_MESSAGE: &str = r#"
 
 fn main() {
     println!("{WELCOME_MESSAGE}");
-    let (sender, receiver) = mpsc::channel::<(ConnectionInformation, Data)>();
+    let (sender, receiver) = mpsc::channel::<Data>();
 
-    thread::spawn(move || controller::controller(receiver));
+    thread::spawn(move || renderer::render(receiver));
     common::listener::listener(ADDRESS, sender)
 }
