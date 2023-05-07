@@ -2,7 +2,6 @@ use std::sync::mpsc;
 use std::thread;
 
 use common::data::Data;
-use common::listener::ConnectionInformation;
 
 mod controller;
 
@@ -21,7 +20,7 @@ const WELCOME_MESSAGE: &str = r#"
 
 fn main() {
     println!("{WELCOME_MESSAGE}");
-    let (sender, receiver) = mpsc::channel::<(ConnectionInformation, Data)>();
+    let (sender, receiver) = mpsc::channel::<Data>();
 
     thread::spawn(move || controller::controller(receiver));
     common::listener::listener(ADDRESS, sender)

@@ -2,7 +2,7 @@ use std::sync::mpsc::Receiver;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::listener::ChannelData;
+use common::data::Data;
 
 use rs_ws281x::{ChannelBuilder, ControllerBuilder, StripType, WS2811Error};
 
@@ -32,29 +32,26 @@ pub(crate) fn controller(receiver: Receiver<Data>) -> Result<(), WS2811Error> {
         .build()?;
 
     let frame_time = Duration::from_secs_f64(1.0 / FRAMES_PER_SECOND);
-    let leds = receiver.recv().expect("channel recv error");
+    let mut data = receiver.recv().expect("channel recv error");
     let mut prev_time = Instant::now();
     loop {
         let leds_mut = controller.leds_mut(0);
 
-        for i in 0..data.num_leds() as usize {
-            let ctrl_led = &mut leds_mut[i];
-            let (r, g, b) = data.led(i);
-            *ctrl_led = [r, g, b, 0];
+        for (i, led) in data.leds.iter().enumerate() {
+            leds_mut[i] = [led.red, led.green, led.blue, 0];
         }
 
         controller.render()?;
 
-        let open_connections = connection.open_connections;
-        let client_id = connection.client_id;
-        let (r, g, b) = data.led(data.num_leds() - 1);
-        let elapsed = prev_time.elapsed();
         // This escape code magic prints a nice colored cell to a color-enabled console.
-        let rgb = format!("\u{1b}[48;2;{r};{g};{b}m \u{1b}[0m");
+        let led = data.leds[data.leds.len() - 1];
+        let rgb = format!(
+            "\u{1b}[48;2;{};{};{}m \u{1b}[0m",
+            led.red, led.green, led.blue
+        );
+        eprintln!("{rgb}");
 
-        let elapsed_millis = elapsed.as_micros() as f32 / 1000.0;
-        println!("({open_connections}) client {client_id:>2}: {elapsed_millis:.2} ms  [{rgb}]",);
-
+        let elapsed = prev_time.elapsed();
         if elapsed < frame_time {
             thread::sleep(frame_time - elapsed);
         }
@@ -62,8 +59,7 @@ pub(crate) fn controller(receiver: Receiver<Data>) -> Result<(), WS2811Error> {
 
         // If there is new data available we use it for the next loop. Else we keep showing the
         // same pattern.
-        if let Ok((new_connection, new_data)) = receiver.recv() {
-            connection = new_connection;
+        if let Ok(new_data) = receiver.recv() {
             data = new_data;
         }
     }
