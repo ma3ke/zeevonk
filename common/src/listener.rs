@@ -3,17 +3,37 @@ use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 use std::sync::mpsc::Sender;
 use std::thread;
 
-use tungstenite::{
-    accept_hdr,
-    handshake::server::{Request, Response},
-    Message,
-};
+use tungstenite::handshake::server::{Request, Response};
+use tungstenite::{accept_hdr, Message};
 
-use crate::{ChannelData, ConnectionInformation, Data};
+use crate::data::Data;
+
+/// A tuple to be sent over the channel, containing the ConnectionInformation metadata and the Data
+/// itself.
+pub type ChannelData = (ConnectionInformation, Data);
+
+/// A ConnectionInformation type which is sent through a channel to communicate the number of open
+/// connections and the sender's client_id to the receiving led driver thread. These values are
+/// used for logging.
+#[derive(Clone, Copy, Debug)]
+pub struct ConnectionInformation {
+    pub client_id: u32,
+    pub open_connections: u32,
+}
+
+impl ConnectionInformation {
+    /// Creates a new Connection struct.
+    pub fn new(client_id: u32, open_connections: u32) -> Self {
+        Self {
+            client_id,
+            open_connections,
+        }
+    }
+}
 
 /// Listens for new websocket connections on `address` and spawns a new thread to listen on for
 /// each connection. When a connection receives data, it is sent over the `sender` channel handler.
-pub(crate) fn listener(address: &str, sender: Sender<ChannelData>) {
+pub fn listener(address: &str, sender: Sender<ChannelData>) {
     static CLIENT_ID: AtomicU32 = AtomicU32::new(0);
     static OPEN_CONNECTIONS: AtomicU32 = AtomicU32::new(0);
 

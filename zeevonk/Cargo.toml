@@ -1,0 +1,8 @@
+[package]
+name = "zeevonk"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+common = { path = "../common"}
+rs_ws281x = { version = "0.4.4" }

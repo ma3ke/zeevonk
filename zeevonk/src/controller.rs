@@ -2,15 +2,17 @@ use std::sync::mpsc::Receiver;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use common::listener::ChannelData;
+
 use rs_ws281x::{ChannelBuilder, ControllerBuilder, StripType, WS2811Error};
 
-use crate::{ChannelData, FRAMES_PER_SECOND, GPIO_PIN};
+use crate::{FRAMES_PER_SECOND, GPIO_PIN};
 
 /// Initializes and runs the led strip controller. When new data is received over the `receiver`
 /// channel handler, it is rendered to the led strip controller on the tempo of FRAMES_PER_SECOND.
 ///
 /// Returns [rs_ws281x::WS2811Error] in case it is returned by internal workings.
-/// Otherwise, this function will not return.
+/// Otherwise, this function will return nothing.
 ///
 /// When no new messages are sent over the channel, the last frame will be displayed continuously.
 pub(crate) fn controller(receiver: Receiver<ChannelData>) -> Result<(), WS2811Error> {
