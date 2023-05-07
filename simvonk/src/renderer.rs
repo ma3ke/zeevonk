@@ -6,6 +6,7 @@ use common::data::Data;
 
 use crate::FRAMES_PER_SECOND;
 
+/// Renders the received led data into the console.
 pub(crate) fn render(receiver: Receiver<Data>) {
     let frame_time = Duration::from_secs_f64(1.0 / FRAMES_PER_SECOND);
     let mut data = receiver.recv().expect("channel recv error");
